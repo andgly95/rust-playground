@@ -1,4 +1,6 @@
 use actix_web::{web, App, HttpResponse, HttpServer, Responder};
+use actix_cors::Cors;
+use actix_web::http::header;
 use serde::{Deserialize, Serialize};
 use std::env;
 
@@ -126,7 +128,15 @@ async fn main() -> std::io::Result<()> {
     dotenv::dotenv().ok();
 
     HttpServer::new(|| {
+        let cors = Cors::default()
+            .allowed_origin("http://localhost:3000")
+            .allowed_methods(vec!["GET", "POST"])
+            .allowed_headers(vec![header::AUTHORIZATION, header::ACCEPT])
+            .allowed_header(header::CONTENT_TYPE)
+            .max_age(3600);
+
         App::new()
+            .wrap(cors)
             .route("/generate_chat", web::post().to(generate_chat))
             .route("/generate_image", web::post().to(generate_image))
     })
