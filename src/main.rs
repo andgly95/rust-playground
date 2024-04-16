@@ -1,7 +1,6 @@
-use std::env;
-use reqwest::Client;
+use actix_web::{web, App, HttpResponse, HttpServer, Responder};
 use serde::{Deserialize, Serialize};
-use dotenv::dotenv;
+use std::env;
 
 #[derive(Serialize, Deserialize, Debug)]
 struct Message {
@@ -15,18 +14,40 @@ struct RequestPayload {
     messages: Vec<Message>,
 }
 
-async fn send_request(api_key: &str, payload: &RequestPayload) -> Result<String, reqwest::Error> {
-    let client = Client::new();
-    let url = "https://api.openai.com/v1/chat/completions";
+#[derive(Deserialize, Debug)]
+struct Choice {
+    message: Message,
+    finish_reason: String,
+    index: i32,
+}
 
-    let json_payload = serde_json::to_string(&payload).unwrap();
-    println!("Request Payload: {}", json_payload);
+#[derive(Deserialize, Debug)]
+struct Usage {
+    prompt_tokens: i32,
+    completion_tokens: i32,
+    total_tokens: i32,
+}
+
+#[derive(Deserialize, Debug)]
+struct Response {
+    id: String,
+    object: String,
+    created: i64,
+    model: String,
+    choices: Vec<Choice>,
+    usage: Usage,
+}
+
+async fn send_request(payload: &RequestPayload) -> Result<String, reqwest::Error> {
+    let api_key = env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY must be set");
+    let client = reqwest::Client::new();
+    let url = "https://api.openai.com/v1/chat/completions";
 
     let response = client
         .post(url)
         .header("Content-Type", "application/json")
         .header("Authorization", format!("Bearer {}", api_key))
-        .body(json_payload)
+        .json(payload)
         .send()
         .await?;
 
@@ -34,29 +55,29 @@ async fn send_request(api_key: &str, payload: &RequestPayload) -> Result<String,
     Ok(result)
 }
 
-#[tokio::main]
-async fn main() -> Result<(), reqwest::Error> {
-    dotenv().ok();
-    let api_key = env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY must be set");
-
-    let messages = vec![
-        Message {
-            role: "system".to_string(),
-            content: "You are a poetic assistant, skilled in explaining complex programming concepts with creative flair.".to_string(),
-        },
-        Message {
-            role: "user".to_string(),
-            content: "Compose a poem that explains the concept of recursion in programming.".to_string(),
-        },
-    ];
-
-    let payload = RequestPayload {
-        model: "gpt-3.5-turbo".to_string(),
-        messages,
+async fn generate_poem(payload: web::Json<RequestPayload>) -> impl Responder {
+    let response_json = match send_request(&payload).await {
+        Ok(json) => json,
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            return HttpResponse::InternalServerError().finish();
+        }
     };
 
-    let response_json = send_request(&api_key, &payload).await?;
-    println!("Response JSON: {}", response_json);
+    let response: Response = serde_json::from_str(&response_json).unwrap();
+    let generated_poem = &response.choices[0].message.content;
 
-    Ok(())
+    HttpResponse::Ok().body(generated_poem.to_string())
+}
+
+#[actix_web::main]
+async fn main() -> std::io::Result<()> {
+    dotenv::dotenv().ok();
+
+    HttpServer::new(|| {
+        App::new().route("/generate_poem", web::post().to(generate_poem))
+    })
+    .bind("127.0.0.1:8080")?
+    .run()
+    .await
 }
