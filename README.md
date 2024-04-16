@@ -2,7 +2,7 @@
 
 This project provides a Rust backend that serves as a foundation for integrating OpenAI's APIs into frontend applications. It currently supports the following OpenAI API functionalities:
 
-- Chat Completion: Generate poems or other text-based content using the GPT-3.5-turbo model.
+- Chat Completion: Generate chats or other text-based content using the GPT-3.5-turbo model.
 - Image Generation: Generate images using the DALL-E model.
 
 ## Prerequisites
@@ -55,7 +55,7 @@ Before running the backend, make sure you have the following:
 
    - **Chat Completion**
 
-     - Endpoint: `POST /generate_poem`
+     - Endpoint: `POST /generate_chat`
      - Request Body (JSON):
        ```json
        {
