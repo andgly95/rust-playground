@@ -38,6 +38,25 @@ struct Response {
     usage: Usage,
 }
 
+#[derive(Serialize, Deserialize, Debug)]
+struct ImageRequestPayload {
+    model: String,
+    prompt: String,
+    size: String,
+    quality: String,
+    n: i32,
+}
+
+#[derive(Deserialize, Debug)]
+struct ImageData {
+    url: String,
+}
+
+#[derive(Deserialize, Debug)]
+struct ImageResponse {
+    data: Vec<ImageData>,
+}
+
 async fn send_request(payload: &RequestPayload) -> Result<String, reqwest::Error> {
     let api_key = env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY must be set");
     let client = reqwest::Client::new();
@@ -55,7 +74,7 @@ async fn send_request(payload: &RequestPayload) -> Result<String, reqwest::Error
     Ok(result)
 }
 
-async fn generate_poem(payload: web::Json<RequestPayload>) -> impl Responder {
+async fn generate_chat(payload: web::Json<RequestPayload>) -> impl Responder {
     let response_json = match send_request(&payload).await {
         Ok(json) => json,
         Err(e) => {
@@ -65,9 +84,41 @@ async fn generate_poem(payload: web::Json<RequestPayload>) -> impl Responder {
     };
 
     let response: Response = serde_json::from_str(&response_json).unwrap();
-    let generated_poem = &response.choices[0].message.content;
+    let generated_chat = &response.choices[0].message.content;
 
-    HttpResponse::Ok().body(generated_poem.to_string())
+    HttpResponse::Ok().body(generated_chat.to_string())
+}
+
+async fn send_image_request(payload: &ImageRequestPayload) -> Result<String, reqwest::Error> {
+    let api_key = env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY must be set");
+    let client = reqwest::Client::new();
+    let url = "https://api.openai.com/v1/images/generations";
+
+    let response = client
+        .post(url)
+        .header("Content-Type", "application/json")
+        .header("Authorization", format!("Bearer {}", api_key))
+        .json(payload)
+        .send()
+        .await?;
+
+    let result = response.text().await?;
+    Ok(result)
+}
+
+async fn generate_image(payload: web::Json<ImageRequestPayload>) -> impl Responder {
+    let response_json = match send_image_request(&payload).await {
+        Ok(json) => json,
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            return HttpResponse::InternalServerError().finish();
+        }
+    };
+
+    let response: ImageResponse = serde_json::from_str(&response_json).unwrap();
+    let image_url = &response.data[0].url;
+
+    HttpResponse::Ok().body(image_url.to_string())
 }
 
 #[actix_web::main]
@@ -75,7 +126,9 @@ async fn main() -> std::io::Result<()> {
     dotenv::dotenv().ok();
 
     HttpServer::new(|| {
-        App::new().route("/generate_poem", web::post().to(generate_poem))
+        App::new()
+            .route("/generate_chat", web::post().to(generate_chat))
+            .route("/generate_image", web::post().to(generate_image))
     })
     .bind("127.0.0.1:8080")?
     .run()
