@@ -40,6 +40,14 @@ struct Response {
     usage: Usage,
 }
 
+#[derive(Deserialize, Debug)]
+struct AnthropicResponse {
+    completion: String,
+    stop_reason: String,
+    truncated: bool,
+    log_id: String,
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 struct ImageRequestPayload {
     model: String,
@@ -60,9 +68,18 @@ struct ImageResponse {
 }
 
 async fn send_request(payload: &RequestPayload) -> Result<String, reqwest::Error> {
-    let api_key = env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY must be set");
+    let api_key = if payload.model.starts_with("claude") {
+        env::var("ANTHROPIC_API_KEY").expect("ANTHROPIC_API_KEY must be set")
+    } else {
+        env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY must be set")
+    };
+
     let client = reqwest::Client::new();
-    let url = "https://api.openai.com/v1/chat/completions";
+    let url = if payload.model.starts_with("claude") {
+        "https://api.anthropic.com/v1/complete"
+    } else {
+        "https://api.openai.com/v1/chat/completions"
+    };
 
     let response = client
         .post(url)
@@ -85,10 +102,15 @@ async fn generate_chat(payload: web::Json<RequestPayload>) -> impl Responder {
         }
     };
 
-    let response: Response = serde_json::from_str(&response_json).unwrap();
-    let generated_chat = &response.choices[0].message.content;
+    let generated_chat = if payload.model.starts_with("claude") {
+        let response: AnthropicResponse = serde_json::from_str(&response_json).unwrap();
+        response.completion.to_string()
+    } else {
+        let response: Response = serde_json::from_str(&response_json).unwrap();
+        response.choices[0].message.content.to_string()
+    };
 
-    HttpResponse::Ok().body(generated_chat.to_string())
+    HttpResponse::Ok().body(generated_chat)
 }
 
 async fn send_image_request(payload: &ImageRequestPayload) -> Result<String, reqwest::Error> {
