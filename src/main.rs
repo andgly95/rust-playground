@@ -16,6 +16,13 @@ struct RequestPayload {
     messages: Vec<Message>,
 }
 
+#[derive(Serialize, Deserialize, Debug)]
+struct TextToSpeechRequestPayload {
+    model: String,
+    input: String,
+    voice: String,
+}
+
 #[derive(Deserialize, Debug)]
 struct Choice {
     message: Message,
@@ -113,6 +120,37 @@ async fn generate_chat(payload: web::Json<RequestPayload>) -> impl Responder {
     HttpResponse::Ok().body(generated_chat)
 }
 
+async fn send_text_to_speech_request(payload: &TextToSpeechRequestPayload) -> Result<Vec<u8>, reqwest::Error> {
+    let api_key = env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY must be set");
+    let client = reqwest::Client::new();
+    let url = "https://api.openai.com/v1/audio/speech";
+
+    let response = client
+        .post(url)
+        .header("Content-Type", "application/json")
+        .header("Authorization", format!("Bearer {}", api_key))
+        .json(payload)
+        .send()
+        .await?;
+
+    let audio_data = response.bytes().await?;
+    Ok(audio_data.to_vec())
+}
+
+async fn generate_speech(payload: web::Json<TextToSpeechRequestPayload>) -> impl Responder {
+    let audio_data = match send_text_to_speech_request(&payload).await {
+        Ok(data) => data,
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            return HttpResponse::InternalServerError().finish();
+        }
+    };
+
+    HttpResponse::Ok()
+        .content_type("audio/mpeg")
+        .body(audio_data)
+}
+
 async fn send_image_request(payload: &ImageRequestPayload) -> Result<String, reqwest::Error> {
     let api_key = env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY must be set");
     let client = reqwest::Client::new();
@@ -162,6 +200,7 @@ async fn main() -> std::io::Result<()> {
             .wrap(cors)
             .route("/generate_chat", web::post().to(generate_chat))
             .route("/generate_image", web::post().to(generate_image))
+            .route("/generate_speech", web::post().to(generate_speech))
     })
     .bind("127.0.0.1:8080")?
     .run()
