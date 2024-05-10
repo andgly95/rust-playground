@@ -132,21 +132,39 @@ async fn generate_chat(payload: web::Json<RequestPayload>) -> impl Responder {
     HttpResponse::Ok().body(generated_chat)
 }
 
-async fn send_speech_to_text_request(payload: &SpeechToTextRequestPayload) -> Result<String, Box<dyn std::error::Error>> {
+
+async fn transcribe_speech(mut payload: Multipart) -> actix_web::Result<HttpResponse> {
+    let mut file_contents = Vec::new();
+    while let Ok(Some(mut field)) = payload.try_next().await {
+        while let Some(chunk) = field.next().await {
+            let data = chunk.unwrap();
+            file_contents.extend_from_slice(&data);
+        }
+    }
+
+    let model = "whisper-1".to_string();
+    let file = "recording.wav".to_string();
+
+    let payload = SpeechToTextRequestPayload {
+        model,
+        file,
+    };
+
+    let transcription = send_speech_to_text_request(&payload, &file_contents)
+        .await
+        .map_err(actix_web::error::ErrorInternalServerError)?;
+
+    Ok(HttpResponse::Ok().body(transcription))
+}
+
+async fn send_speech_to_text_request(payload: &SpeechToTextRequestPayload, file_contents: &[u8]) -> Result<String, Box<dyn std::error::Error>> {
     let api_key = env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY must be set");
     let client = reqwest::Client::new();
     let url = "https://api.openai.com/v1/audio/transcriptions";
 
-    // log payload
-    println!("{:?}", payload);
-
-    let mut file = File::open(&payload.file)?;
-    let mut file_contents = Vec::new();
-    file.read_to_end(&mut file_contents)?;
-
-    let part = reqwest::multipart::Part::bytes(file_contents)
+    let part = reqwest::multipart::Part::bytes(file_contents.to_vec())
         .file_name(payload.file.clone())
-        .mime_str("audio/mpeg")?;
+        .mime_str("audio/wav")?;
 
     let form = reqwest::multipart::Form::new()
         .text("model", payload.model.clone())
@@ -162,54 +180,6 @@ async fn send_speech_to_text_request(payload: &SpeechToTextRequestPayload) -> Re
     let result = response.text().await?;
     Ok(result)
 }
-
-async fn transcribe_speech(mut payload: Multipart) -> actix_web::Result<HttpResponse> {
-    let mut file_path = None;
-    while let Ok(Some(mut field)) = payload.try_next().await {
-        let content_disposition = field.content_disposition();
-        let filename = content_disposition
-            .get_filename()
-            .map(|f| f.to_string())
-            .unwrap_or_else(|| "recording.wav".to_string());
-
-        let filepath = format!("./temp/{}", filename);
-        
-        // Create the "./temp/" directory if it doesn't exist
-        std::fs::create_dir_all("./temp/").map_err(actix_web::error::ErrorInternalServerError)?;
-        
-        let mut file = web::block(|| std::fs::File::create(filepath))
-            .await
-            .map_err(actix_web::error::ErrorInternalServerError)?;
-
-        while let Some(chunk) = field.next().await {
-            let data = chunk.unwrap();
-            let result = web::block(move || match file {
-                Ok(mut file) => file.write_all(&data).map(|_| file),
-                Err(err) => Err(err),
-            })
-            .await
-            .map_err(actix_web::error::ErrorInternalServerError)?;
-
-            file = result;
-        }
-        file_path = Some(filename);
-    }
-
-    let model = "whisper-1".to_string();
-    let file = file_path.unwrap();
-
-    let payload = SpeechToTextRequestPayload {
-        model,
-        file,
-    };
-
-    let transcription = send_speech_to_text_request(&payload)
-        .await
-        .map_err(actix_web::error::ErrorInternalServerError)?;
-
-    Ok(HttpResponse::Ok().body(transcription))
-}
-
 
 
 async fn send_text_to_speech_request(payload: &TextToSpeechRequestPayload) -> Result<Vec<u8>, reqwest::Error> {
