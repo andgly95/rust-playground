@@ -5,6 +5,10 @@ use serde::{Deserialize, Serialize};
 use std::env;
 use std::fs::File;
 use std::io::Read;
+use std::io::Write;
+use actix_multipart::Multipart;
+use futures::{StreamExt, TryStreamExt};
+
 
 #[derive(Serialize, Deserialize, Debug)]
 struct Message {
@@ -133,6 +137,9 @@ async fn send_speech_to_text_request(payload: &SpeechToTextRequestPayload) -> Re
     let client = reqwest::Client::new();
     let url = "https://api.openai.com/v1/audio/transcriptions";
 
+    // log payload
+    println!("{:?}", payload);
+
     let mut file = File::open(&payload.file)?;
     let mut file_contents = Vec::new();
     file.read_to_end(&mut file_contents)?;
@@ -156,16 +163,51 @@ async fn send_speech_to_text_request(payload: &SpeechToTextRequestPayload) -> Re
     Ok(result)
 }
 
-async fn transcribe_speech(payload: web::Json<SpeechToTextRequestPayload>) -> impl Responder {
-    let transcription = match send_speech_to_text_request(&payload).await {
-        Ok(text) => text,
-        Err(e) => {
-            eprintln!("Error: {}", e);
-            return HttpResponse::InternalServerError().finish();
+async fn transcribe_speech(mut payload: Multipart) -> actix_web::Result<HttpResponse> {
+    let mut file_path = None;
+    while let Ok(Some(mut field)) = payload.try_next().await {
+        let content_disposition = field.content_disposition();
+        let filename = content_disposition
+            .get_filename()
+            .map(|f| f.to_string())
+            .unwrap_or_else(|| "recording.wav".to_string());
+
+        let filepath = format!("./temp/{}", filename);
+        
+        // Create the "./temp/" directory if it doesn't exist
+        std::fs::create_dir_all("./temp/").map_err(actix_web::error::ErrorInternalServerError)?;
+        
+        let mut file = web::block(|| std::fs::File::create(filepath))
+            .await
+            .map_err(actix_web::error::ErrorInternalServerError)?;
+
+        while let Some(chunk) = field.next().await {
+            let data = chunk.unwrap();
+            let result = web::block(move || match file {
+                Ok(mut file) => file.write_all(&data).map(|_| file),
+                Err(err) => Err(err),
+            })
+            .await
+            .map_err(actix_web::error::ErrorInternalServerError)?;
+
+            file = result;
         }
+        file_path = Some(filename);
+    }
+
+    let model = "whisper-1".to_string();
+    let file = file_path.unwrap();
+
+    let payload = SpeechToTextRequestPayload {
+        model,
+        file,
     };
 
-    HttpResponse::Ok().body(transcription)
+    let transcription = send_speech_to_text_request(&payload)
+        .await
+        .map_err(actix_web::error::ErrorInternalServerError)?;
+
+    Ok(HttpResponse::Ok().body(transcription))
 }
 
 
