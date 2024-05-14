@@ -23,7 +23,7 @@ struct JoinGameResponse {
 
 
 #[derive(Serialize, Deserialize)]
-struct PlayerReadyRequest {
+pub struct PlayerReadyRequest {
     game_uuid: String,
     player_id: String,
 }
@@ -170,7 +170,7 @@ pub async fn join_game(game_data: web::Json<JoinGameRequest>) -> impl Responder 
     game_state.players.push(player);
 
     if game_state.players.len() == 2 && game_state.players.iter().all(|p| p.ready) {
-        game_state.status = "in_progress".to_string();
+        game_state.status = "imagining".to_string();
     }
 
     match conn.execute(
@@ -216,7 +216,7 @@ pub async fn player_ready(game_data: web::Json<PlayerReadyRequest>) -> impl Resp
     }
 
     if game_state.players.len() == 2 && game_state.players.iter().all(|p| p.ready) {
-        game_state.status = "in_progress".to_string();
+        game_state.status = "imagining".to_string();
     }
 
 

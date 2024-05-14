@@ -300,6 +300,7 @@ async fn main() -> std::io::Result<()> {
             .route("/transcribe_speech", web::post().to(transcribe_speech))
             .route("/create_game", web::post().to(game_handlers::create_game))
             .route("/join_game", web::post().to(game_handlers::join_game))
+            .route("/player_ready", web::post().to(game_handlers::player_ready))
             .route("/create_user", web::post().to(create_user))
     })
     .bind("127.0.0.1:8080")?
