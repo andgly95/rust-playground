@@ -13,11 +13,40 @@ struct CreateGameResponse {
 #[derive(Deserialize)]
 pub struct JoinGameRequest {
     game_code: String,
+    player_id: String,
 }
 
 #[derive(Serialize)]
 struct JoinGameResponse {
     game_uuid: String,
+}
+
+
+#[derive(Serialize, Deserialize)]
+struct PlayerReadyRequest {
+    game_uuid: String,
+    player_id: String,
+}
+
+#[derive(Serialize, Deserialize)]
+struct Player {
+    id: String,
+    username: String,
+    score: i32,
+    ready: bool,
+}
+
+#[derive(Serialize, Deserialize)]
+struct GameState {
+    game_id: String,
+    status: String,
+    current_round: i32,
+    total_rounds: i32,
+    players: Vec<Player>,
+    current_prompt: String,
+    current_image: String,
+    submitted_prompts: Vec<(String, String)>,
+    submitted_guesses: Vec<(String, String, String)>,
 }
 
 pub async fn create_game() -> impl Responder {
@@ -52,6 +81,18 @@ pub async fn create_game() -> impl Responder {
         }
     }
 
+    let initial_state = GameState {
+        game_id: game_uuid.clone(),
+        status: "waiting".to_string(),
+        current_round: 1,
+        total_rounds: 3,
+        players: vec![],
+        current_prompt: "".to_string(),
+        current_image: "".to_string(),
+        submitted_prompts: vec![],
+        submitted_guesses: vec![],
+    };
+
     match conn.execute(
         "INSERT INTO game_codes (code, game_uuid) VALUES (?1, ?2)",
         params![game_code, game_uuid],
@@ -65,7 +106,7 @@ pub async fn create_game() -> impl Responder {
 
     match conn.execute(
         "INSERT INTO games (uuid, state) VALUES (?1, ?2)",
-        params![game_uuid, serde_json::to_string(&initial_game_state()).unwrap()],
+        params![game_uuid, serde_json::to_string(&initial_state).unwrap()],
     ) {
         Ok(_) => (),
         Err(e) => {
@@ -98,7 +139,88 @@ pub async fn join_game(game_data: web::Json<JoinGameRequest>) -> impl Responder 
         }
     };
 
-    HttpResponse::Ok().json(JoinGameResponse { game_uuid })
+    let mut game_state: GameState = match conn.query_row(
+        "SELECT state FROM games WHERE uuid = ?1",
+        params![game_uuid],
+        |row| {
+            let state_json: String = row.get(0)?;
+            serde_json::from_str(&state_json).map_err(|_| rusqlite::Error::InvalidQuery)
+        },
+    ) {
+        Ok(state) => state,
+        Err(_) => return HttpResponse::NotFound().finish(),
+    };
+
+    let username: String = match conn.query_row(
+        "SELECT username FROM users WHERE id = ?1",
+        params![game_data.player_id],
+        |row| row.get(0),
+    ) {
+        Ok(username) => username,
+        Err(_) => "".to_string(),
+    };
+
+    let player = Player {
+        id: game_data.player_id.clone(),
+        username,
+        score: 0,
+        ready: false,
+    };
+
+    game_state.players.push(player);
+
+    if game_state.players.len() == 2 && game_state.players.iter().all(|p| p.ready) {
+        game_state.status = "in_progress".to_string();
+    }
+
+    match conn.execute(
+        "UPDATE games SET state = ?1 WHERE uuid = ?2",
+        params![serde_json::to_string(&game_state).unwrap(), game_uuid],
+    ) {
+        Ok(_) => (),
+        Err(e) => {
+            eprintln!("Error updating game state: {}", e);
+            return HttpResponse::InternalServerError().finish();
+        }
+    }
+
+    HttpResponse::Ok().json(game_state)
+}
+
+
+
+pub async fn player_ready(game_data: web::Json<PlayerReadyRequest>) -> impl Responder {
+
+    let conn = match Connection::open("game_database.db") {
+        Ok(conn) => conn,
+        Err(e) => {
+            eprintln!("Error connecting to database: {}", e);
+            return HttpResponse::InternalServerError().finish();
+        }
+    };
+
+    let mut game_state: GameState = match conn.query_row(
+        "SELECT state FROM games WHERE uuid = ?1",
+        params![game_data.game_uuid],
+        |row| {
+            let state_json: String = row.get(0)?;
+            serde_json::from_str(&state_json).map_err(|_| rusqlite::Error::InvalidQuery)
+        },
+    ) {
+        Ok(state) => state,
+        Err(_) => return HttpResponse::NotFound().finish(),
+    };
+
+    if let Some(player) = game_state.players.iter_mut().find(|p| p.id == game_data.player_id) {
+        player.ready = true;
+    }
+
+    if game_state.players.len() == 2 && game_state.players.iter().all(|p| p.ready) {
+        game_state.status = "in_progress".to_string();
+    }
+
+
+    HttpResponse::Ok().json(game_state)
 }
 
 fn generate_game_code() -> String {
@@ -114,16 +236,4 @@ fn generate_game_code() -> String {
         .collect();
 
     game_code
-}
-
-fn initial_game_state() -> serde_json::Value {
-    serde_json::json!({
-        "current_round": 1,
-        "total_rounds": 3,
-        "current_prompts": [],
-        "current_images": [],
-        "is_submitting_prompts": false,
-        "is_generating_images": false,
-        "is_guessing_images": false
-    })
 }

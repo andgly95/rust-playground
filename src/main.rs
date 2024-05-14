@@ -277,7 +277,7 @@ async fn main() -> std::io::Result<()> {
     conn.execute(
         "CREATE TABLE IF NOT EXISTS users (
             id TEXT PRIMARY KEY,
-            username TEXT NOT NULL
+            username TEXT UNIQUE NOT NULL
         )",
         [],
     ).expect("Failed to create users table");

@@ -27,6 +27,27 @@ pub async fn create_user(user_data: web::Json<CreateUserRequest>) -> impl Respon
         }
     };
 
+    // Check if username already exists
+    let mut stmt = match conn.prepare("SELECT 1 FROM users WHERE username = ?1") {
+        Ok(stmt) => stmt,
+        Err(e) => {
+            eprintln!("Error preparing statement: {}", e);
+            return HttpResponse::InternalServerError().finish();
+        }
+    };
+
+    let username_exists = match stmt.exists(params![&user_data.username]) {
+        Ok(exists) => exists,
+        Err(e) => {
+            eprintln!("Error checking for existing username: {}", e);
+            return HttpResponse::InternalServerError().finish();
+        }
+    };
+
+    if username_exists {
+        return HttpResponse::BadRequest().body("Username already exists");
+    }
+
     match conn.execute(
         "INSERT INTO users (id, username) VALUES (?1, ?2)",
         params![user_id, user_data.username],
