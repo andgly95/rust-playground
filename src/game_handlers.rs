@@ -219,6 +219,16 @@ pub async fn player_ready(game_data: web::Json<PlayerReadyRequest>) -> impl Resp
         game_state.status = "imagining".to_string();
     }
 
+    match conn.execute(
+        "UPDATE games SET state = ?1 WHERE uuid = ?2",
+        params![serde_json::to_string(&game_state).unwrap(), game_data.game_uuid],
+    ) {
+        Ok(_) => (),
+        Err(e) => {
+            eprintln!("Error updating game state: {}", e);
+            return HttpResponse::InternalServerError().finish();
+        }
+    }
 
     HttpResponse::Ok().json(game_state)
 }
