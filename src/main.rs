@@ -34,8 +34,6 @@ async fn main() -> std::io::Result<()> {
         [],
     ).expect("Failed to create games table");
 
-
-    let conn = Connection::open("game_database.db").expect("Failed to open database connection");
     conn.execute(
         "CREATE TABLE IF NOT EXISTS users (
             id TEXT PRIMARY KEY,
@@ -64,6 +62,8 @@ async fn main() -> std::io::Result<()> {
             .route("/create_game", web::post().to(game_handlers::create_game))
             .route("/join_game", web::post().to(game_handlers::join_game))
             .route("/player_ready", web::post().to(game_handlers::player_ready))
+            .route("/submit_prompt", web::post().to(game_handlers::submit_prompt))
+
 
             .route("/create_user", web::post().to(user_handlers::create_user))
     })

@@ -28,12 +28,96 @@ pub struct PlayerReadyRequest {
     player_id: String,
 }
 
+#[derive(Deserialize)]
+pub struct SubmitPromptRequest {
+    game_uuid: String,
+    player_id: String,
+    prompt: String,
+}
+
 #[derive(Serialize, Deserialize)]
 struct Player {
     id: String,
     username: String,
     score: i32,
     ready: bool,
+}
+
+#[derive(Deserialize)]
+pub struct GetGameStateRequest {
+    game_id: String,
+}
+
+pub async fn get_game_state(game_data: web::Json<GetGameStateRequest>) -> impl Responder {
+    let conn = match Connection::open("game_database.db") {
+        Ok(conn) => conn,
+        Err(e) => {
+            eprintln!("Error connecting to database: {}", e);
+            return HttpResponse::InternalServerError().finish();
+        }
+    };
+
+    let game_state: GameState = match conn.query_row(
+        "SELECT state FROM games WHERE uuid = ?1",
+        params![game_data.game_id],
+        |row| {
+            let state_json: String = row.get(0)?;
+            serde_json::from_str(&state_json).map_err(|_| rusqlite::Error::InvalidQuery)
+        },
+    ) {
+        Ok(state) => state,
+        Err(_) => return HttpResponse::NotFound().finish(),
+    };
+
+    HttpResponse::Ok().json(game_state)
+}
+
+pub async fn submit_prompt(game_data: web::Json<SubmitPromptRequest>) -> impl Responder {
+    let conn = match Connection::open("game_database.db") {
+        Ok(conn) => conn,
+        Err(e) => {
+            eprintln!("Error connecting to database: {}", e);
+            return HttpResponse::InternalServerError().finish();
+        }
+    };
+
+    let mut game_state: GameState = match conn.query_row(
+        "SELECT state FROM games WHERE uuid = ?1",
+        params![game_data.game_uuid],
+        |row| {
+            let state_json: String = row.get(0)?;
+            serde_json::from_str(&state_json).map_err(|_| rusqlite::Error::InvalidQuery)
+        },
+    ) {
+        Ok(state) => state,
+        Err(_) => return HttpResponse::NotFound().finish(),
+    };
+
+    if game_state.status != "imagining" {
+        return HttpResponse::BadRequest().body("Game is not in the imagining phase");
+    }
+
+    let player_id = game_data.player_id.clone();
+    let prompt = game_data.prompt.clone();
+
+    game_state.submitted_prompts.push((player_id, prompt));
+
+    if game_state.submitted_prompts.len() == game_state.players.len() {
+        game_state.status = "guessing".to_string();
+    }
+
+    match conn.execute(
+        "UPDATE games SET state = ?1 WHERE uuid = ?2",
+        params![serde_json::to_string(&game_state).unwrap(), game_data.game_uuid],
+    ) {
+        Ok(_) => (),
+        Err(e) => {
+            eprintln!("Error updating game state: {}", e);
+            return HttpResponse::InternalServerError().finish();
+        }
+    }
+
+    HttpResponse::Ok().json(game_state)
 }
 
 #[derive(Serialize, Deserialize)]
