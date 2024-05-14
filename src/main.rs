@@ -8,6 +8,12 @@ use std::io::Read;
 use std::io::Write;
 use actix_multipart::Multipart;
 use futures::{StreamExt, TryStreamExt};
+use rusqlite::Connection;
+
+
+mod game_handlers;
+mod user_handlers;
+use user_handlers::{create_user, CreateUserRequest};
 
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -249,6 +255,34 @@ async fn generate_image(payload: web::Json<ImageRequestPayload>) -> impl Respond
 async fn main() -> std::io::Result<()> {
     dotenv::dotenv().ok();
 
+    let conn = Connection::open("game_database.db").expect("Failed to open database connection");
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS game_codes (
+            code TEXT PRIMARY KEY,
+            game_uuid TEXT NOT NULL
+        )",
+        [],
+    ).expect("Failed to create game_codes table");
+
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS games (
+            uuid TEXT PRIMARY KEY,
+            state TEXT NOT NULL
+        )",
+        [],
+    ).expect("Failed to create games table");
+
+
+    let conn = Connection::open("game_database.db").expect("Failed to open database connection");
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS users (
+            id TEXT PRIMARY KEY,
+            username TEXT NOT NULL
+        )",
+        [],
+    ).expect("Failed to create users table");
+
+
     HttpServer::new(|| {
         let cors = Cors::default()
             .allowed_origin("https://guess-ai.app")
@@ -264,6 +298,9 @@ async fn main() -> std::io::Result<()> {
             .route("/generate_image", web::post().to(generate_image))
             .route("/generate_speech", web::post().to(generate_speech))
             .route("/transcribe_speech", web::post().to(transcribe_speech))
+            .route("/create_game", web::post().to(game_handlers::create_game))
+            .route("/join_game", web::post().to(game_handlers::join_game))
+            .route("/create_user", web::post().to(create_user))
     })
     .bind("127.0.0.1:8080")?
     .run()
