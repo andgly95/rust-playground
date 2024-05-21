@@ -1,2 +1,3 @@
 /target
 .env
+game_database.db
