@@ -1,4 +1,5 @@
 // game_handlers.rs
+use crate::ai_handlers;
 use actix_web::{web, HttpResponse, Responder};
 use rand::Rng;
 use rusqlite::{params, Connection};
@@ -20,7 +21,6 @@ pub struct JoinGameRequest {
 struct JoinGameResponse {
     game_uuid: String,
 }
-
 
 #[derive(Serialize, Deserialize)]
 pub struct PlayerReadyRequest {
@@ -46,6 +46,12 @@ struct Player {
 #[derive(Deserialize)]
 pub struct GetGameStateRequest {
     game_id: String,
+}
+
+#[derive(Deserialize)]
+pub struct ScoreGuessPayload {
+    prompt: String,
+    guess: String,
 }
 
 pub async fn get_game_state(game_data: web::Json<GetGameStateRequest>) -> impl Responder {
@@ -108,7 +114,10 @@ pub async fn submit_prompt(game_data: web::Json<SubmitPromptRequest>) -> impl Re
 
     match conn.execute(
         "UPDATE games SET state = ?1 WHERE uuid = ?2",
-        params![serde_json::to_string(&game_state).unwrap(), game_data.game_uuid],
+        params![
+            serde_json::to_string(&game_state).unwrap(),
+            game_data.game_uuid
+        ],
     ) {
         Ok(_) => (),
         Err(e) => {
@@ -271,10 +280,7 @@ pub async fn join_game(game_data: web::Json<JoinGameRequest>) -> impl Responder 
     HttpResponse::Ok().json(game_state)
 }
 
-
-
 pub async fn player_ready(game_data: web::Json<PlayerReadyRequest>) -> impl Responder {
-
     let conn = match Connection::open("game_database.db") {
         Ok(conn) => conn,
         Err(e) => {
@@ -295,7 +301,11 @@ pub async fn player_ready(game_data: web::Json<PlayerReadyRequest>) -> impl Resp
         Err(_) => return HttpResponse::NotFound().finish(),
     };
 
-    if let Some(player) = game_state.players.iter_mut().find(|p| p.id == game_data.player_id) {
+    if let Some(player) = game_state
+        .players
+        .iter_mut()
+        .find(|p| p.id == game_data.player_id)
+    {
         player.ready = true;
     }
 
@@ -305,7 +315,10 @@ pub async fn player_ready(game_data: web::Json<PlayerReadyRequest>) -> impl Resp
 
     match conn.execute(
         "UPDATE games SET state = ?1 WHERE uuid = ?2",
-        params![serde_json::to_string(&game_state).unwrap(), game_data.game_uuid],
+        params![
+            serde_json::to_string(&game_state).unwrap(),
+            game_data.game_uuid
+        ],
     ) {
         Ok(_) => (),
         Err(e) => {
@@ -330,4 +343,19 @@ fn generate_game_code() -> String {
         .collect();
 
     game_code
+}
+
+pub async fn score_guess(payload: web::Json<ScoreGuessPayload>) -> HttpResponse {
+    let prompt = payload.prompt.clone();
+    let guess = payload.guess.clone();
+
+    // Wrap the prompt and guess values in web::Json
+    let prompt_json = web::Json(prompt);
+    let guess_json = web::Json(guess);
+
+    // Calculate the similarity score between the prompt and guess
+    let score = ai_handlers::calculate_similarity(prompt_json, guess_json).await;
+
+    // Return the score as the response
+    HttpResponse::Ok().body(score)
 }

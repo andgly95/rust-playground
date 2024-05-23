@@ -1,10 +1,9 @@
 // ai_handlers.rs
+use actix_multipart::Multipart;
 use actix_web::{web, HttpResponse, Responder};
+use futures::{StreamExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
 use std::env;
-use actix_multipart::Multipart;
-use futures::{StreamExt, TryStreamExt};
-
 
 #[derive(Serialize, Deserialize, Debug)]
 struct Message {
@@ -82,6 +81,12 @@ struct ImageResponse {
     data: Vec<ImageData>,
 }
 
+#[derive(Serialize, Deserialize, Debug)]
+pub struct EmbeddingRequestPayload {
+    model: String,
+    input: Vec<String>,
+}
+
 pub async fn send_request(payload: &RequestPayload) -> Result<String, reqwest::Error> {
     let api_key = if payload.model.starts_with("claude") {
         env::var("ANTHROPIC_API_KEY").expect("ANTHROPIC_API_KEY must be set")
@@ -131,7 +136,7 @@ pub async fn generate_chat(payload: web::Json<RequestPayload>) -> impl Responder
 pub async fn send_speech_to_text_request(
     payload: &SpeechToTextRequestPayload,
     file_contents: &[u8],
-) -> Result<String, Box<dyn std::error::Error>> {    
+) -> Result<String, Box<dyn std::error::Error>> {
     let api_key = env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY must be set");
     let client = reqwest::Client::new();
     let url = "https://api.openai.com/v1/audio/transcriptions";
@@ -167,10 +172,7 @@ pub async fn transcribe_speech(mut payload: Multipart) -> actix_web::Result<Http
     let model = "whisper-1".to_string();
     let file = "recording.wav".to_string();
 
-    let payload = SpeechToTextRequestPayload {
-        model,
-        file,
-    };
+    let payload = SpeechToTextRequestPayload { model, file };
 
     let transcription = send_speech_to_text_request(&payload, &file_contents)
         .await
@@ -242,4 +244,81 @@ pub async fn generate_image(payload: web::Json<ImageRequestPayload>) -> impl Res
     let image_url = &response.data[0].url;
 
     HttpResponse::Ok().body(image_url.to_string())
+}
+
+pub async fn send_embedding_request(
+    payload: &EmbeddingRequestPayload,
+) -> Result<String, reqwest::Error> {
+    let api_key = env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY must be set");
+    let client = reqwest::Client::new();
+    let url = "https://api.openai.com/v1/embeddings";
+
+    let response = client
+        .post(url)
+        .header("Content-Type", "application/json")
+        .header("Authorization", format!("Bearer {}", api_key))
+        .json(payload)
+        .send()
+        .await?;
+
+    let result = response.text().await?;
+    Ok(result)
+}
+
+pub async fn get_embeddings(payload: web::Json<EmbeddingRequestPayload>) -> impl Responder {
+    let response_json = match send_embedding_request(&payload).await {
+        Ok(json) => json,
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            return HttpResponse::InternalServerError().finish();
+        }
+    };
+
+    HttpResponse::Ok().body(response_json)
+}
+
+pub async fn calculate_similarity(prompt: web::Json<String>, guess: web::Json<String>) -> String {
+    let model = "text-embedding-ada-002".to_string();
+    let input = vec![prompt.to_string(), guess.to_string()];
+
+    let payload = EmbeddingRequestPayload { model, input };
+
+    let response_json = match send_embedding_request(&payload).await {
+        Ok(json) => json,
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            return "Error".to_string();
+        }
+    };
+
+    // Parse the response JSON to extract the embeddings
+    let response: serde_json::Value = serde_json::from_str(&response_json).unwrap();
+    let embeddings = response["data"].as_array().unwrap();
+    let prompt_embedding = embeddings[0]["embedding"].as_array().unwrap();
+    let guess_embedding = embeddings[1]["embedding"].as_array().unwrap();
+
+    // Convert the embeddings from Vec<Value> to Vec<f64>
+    let prompt_embedding: Vec<f64> = prompt_embedding
+        .iter()
+        .map(|v| v.as_f64().unwrap())
+        .collect();
+    let guess_embedding: Vec<f64> = guess_embedding
+        .iter()
+        .map(|v| v.as_f64().unwrap())
+        .collect();
+
+    // Calculate the cosine similarity between the embeddings
+    let similarity = cosine_similarity(&prompt_embedding, &guess_embedding);
+
+    // Convert the similarity to a score between 0 and 100
+    let score = (similarity * 50.0 + 50.0).round() as u32;
+
+    score.to_string()
+}
+
+fn cosine_similarity(a: &[f64], b: &[f64]) -> f64 {
+    let dot_product: f64 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
+    let magnitude_a: f64 = a.iter().map(|x| x.powi(2)).sum::<f64>().sqrt();
+    let magnitude_b: f64 = b.iter().map(|x| x.powi(2)).sum::<f64>().sqrt();
+    dot_product / (magnitude_a * magnitude_b)
 }
