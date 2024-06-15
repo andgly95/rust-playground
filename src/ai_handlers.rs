@@ -87,30 +87,30 @@ pub struct EmbeddingRequestPayload {
     input: Vec<String>,
 }
 
-pub async fn send_request(payload: &RequestPayload) -> Result<String, reqwest::Error> {
+async fn send_request(payload: &RequestPayload) -> Result<String, reqwest::Error> {
     let api_key = if payload.model.starts_with("claude") {
         env::var("ANTHROPIC_API_KEY").expect("ANTHROPIC_API_KEY must be set")
     } else {
         env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY must be set")
     };
 
-    let client = reqwest::Client::new();
     let url = if payload.model.starts_with("claude") {
         "https://api.anthropic.com/v1/complete"
     } else {
         "https://api.openai.com/v1/chat/completions"
     };
 
-    let response = client
+    let response = reqwest::Client::new()
         .post(url)
         .header("Content-Type", "application/json")
         .header("Authorization", format!("Bearer {}", api_key))
         .json(payload)
         .send()
+        .await?
+        .text()
         .await?;
 
-    let result = response.text().await?;
-    Ok(result)
+    Ok(response)
 }
 
 pub async fn generate_chat(payload: web::Json<RequestPayload>) -> impl Responder {
@@ -124,7 +124,7 @@ pub async fn generate_chat(payload: web::Json<RequestPayload>) -> impl Responder
 
     let generated_chat = if payload.model.starts_with("claude") {
         let response: AnthropicResponse = serde_json::from_str(&response_json).unwrap();
-        response.completion.to_string()
+        response.completion
     } else {
         let response: Response = serde_json::from_str(&response_json).unwrap();
         response.choices[0].message.content.to_string()
@@ -133,12 +133,11 @@ pub async fn generate_chat(payload: web::Json<RequestPayload>) -> impl Responder
     HttpResponse::Ok().body(generated_chat)
 }
 
-pub async fn send_speech_to_text_request(
+async fn send_speech_to_text_request(
     payload: &SpeechToTextRequestPayload,
     file_contents: &[u8],
 ) -> Result<String, Box<dyn std::error::Error>> {
     let api_key = env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY must be set");
-    let client = reqwest::Client::new();
     let url = "https://api.openai.com/v1/audio/transcriptions";
 
     let part = reqwest::multipart::Part::bytes(file_contents.to_vec())
@@ -149,15 +148,16 @@ pub async fn send_speech_to_text_request(
         .text("model", payload.model.clone())
         .part("file", part);
 
-    let response = client
+    let response = reqwest::Client::new()
         .post(url)
         .header("Authorization", format!("Bearer {}", api_key))
         .multipart(form)
         .send()
+        .await?
+        .text()
         .await?;
 
-    let result = response.text().await?;
-    Ok(result)
+    Ok(response)
 }
 
 pub async fn transcribe_speech(mut payload: Multipart) -> actix_web::Result<HttpResponse> {
@@ -169,10 +169,10 @@ pub async fn transcribe_speech(mut payload: Multipart) -> actix_web::Result<Http
         }
     }
 
-    let model = "whisper-1".to_string();
-    let file = "recording.wav".to_string();
-
-    let payload = SpeechToTextRequestPayload { model, file };
+    let payload = SpeechToTextRequestPayload {
+        model: "whisper-1".to_string(),
+        file: "recording.wav".to_string(),
+    };
 
     let transcription = send_speech_to_text_request(&payload, &file_contents)
         .await
@@ -181,23 +181,24 @@ pub async fn transcribe_speech(mut payload: Multipart) -> actix_web::Result<Http
     Ok(HttpResponse::Ok().body(transcription))
 }
 
-pub async fn send_text_to_speech_request(
+async fn send_text_to_speech_request(
     payload: &TextToSpeechRequestPayload,
 ) -> Result<Vec<u8>, reqwest::Error> {
     let api_key = env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY must be set");
-    let client = reqwest::Client::new();
     let url = "https://api.openai.com/v1/audio/speech";
 
-    let response = client
+    let response = reqwest::Client::new()
         .post(url)
         .header("Content-Type", "application/json")
         .header("Authorization", format!("Bearer {}", api_key))
         .json(payload)
         .send()
-        .await?;
+        .await?
+        .bytes()
+        .await?
+        .to_vec();
 
-    let audio_data = response.bytes().await?;
-    Ok(audio_data.to_vec())
+    Ok(response)
 }
 
 pub async fn generate_speech(payload: web::Json<TextToSpeechRequestPayload>) -> impl Responder {
@@ -214,21 +215,21 @@ pub async fn generate_speech(payload: web::Json<TextToSpeechRequestPayload>) -> 
         .body(audio_data)
 }
 
-pub async fn send_image_request(payload: &ImageRequestPayload) -> Result<String, reqwest::Error> {
+async fn send_image_request(payload: &ImageRequestPayload) -> Result<String, reqwest::Error> {
     let api_key = env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY must be set");
-    let client = reqwest::Client::new();
     let url = "https://api.openai.com/v1/images/generations";
 
-    let response = client
+    let response = reqwest::Client::new()
         .post(url)
         .header("Content-Type", "application/json")
         .header("Authorization", format!("Bearer {}", api_key))
         .json(payload)
         .send()
+        .await?
+        .text()
         .await?;
 
-    let result = response.text().await?;
-    Ok(result)
+    Ok(response)
 }
 
 pub async fn generate_image(payload: web::Json<ImageRequestPayload>) -> impl Responder {
@@ -246,23 +247,23 @@ pub async fn generate_image(payload: web::Json<ImageRequestPayload>) -> impl Res
     HttpResponse::Ok().body(image_url.to_string())
 }
 
-pub async fn send_embedding_request(
+async fn send_embedding_request(
     payload: &EmbeddingRequestPayload,
 ) -> Result<String, reqwest::Error> {
     let api_key = env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY must be set");
-    let client = reqwest::Client::new();
     let url = "https://api.openai.com/v1/embeddings";
 
-    let response = client
+    let response = reqwest::Client::new()
         .post(url)
         .header("Content-Type", "application/json")
         .header("Authorization", format!("Bearer {}", api_key))
         .json(payload)
         .send()
+        .await?
+        .text()
         .await?;
 
-    let result = response.text().await?;
-    Ok(result)
+    Ok(response)
 }
 
 pub async fn get_embeddings(payload: web::Json<EmbeddingRequestPayload>) -> impl Responder {
@@ -278,10 +279,10 @@ pub async fn get_embeddings(payload: web::Json<EmbeddingRequestPayload>) -> impl
 }
 
 pub async fn calculate_similarity(prompt: web::Json<String>, guess: web::Json<String>) -> String {
-    let model = "text-embedding-ada-002".to_string();
-    let input = vec![prompt.to_string(), guess.to_string()];
-
-    let payload = EmbeddingRequestPayload { model, input };
+    let payload = EmbeddingRequestPayload {
+        model: "text-embedding-ada-002".to_string(),
+        input: vec![prompt.to_string(), guess.to_string()],
+    };
 
     let response_json = match send_embedding_request(&payload).await {
         Ok(json) => json,
@@ -291,26 +292,22 @@ pub async fn calculate_similarity(prompt: web::Json<String>, guess: web::Json<St
         }
     };
 
-    // Parse the response JSON to extract the embeddings
     let response: serde_json::Value = serde_json::from_str(&response_json).unwrap();
     let embeddings = response["data"].as_array().unwrap();
-    let prompt_embedding = embeddings[0]["embedding"].as_array().unwrap();
-    let guess_embedding = embeddings[1]["embedding"].as_array().unwrap();
-
-    // Convert the embeddings from Vec<Value> to Vec<f64>
-    let prompt_embedding: Vec<f64> = prompt_embedding
+    let prompt_embedding: Vec<f64> = embeddings[0]["embedding"]
+        .as_array()
+        .unwrap()
         .iter()
         .map(|v| v.as_f64().unwrap())
         .collect();
-    let guess_embedding: Vec<f64> = guess_embedding
+    let guess_embedding: Vec<f64> = embeddings[1]["embedding"]
+        .as_array()
+        .unwrap()
         .iter()
         .map(|v| v.as_f64().unwrap())
         .collect();
 
-    // Calculate the cosine similarity between the embeddings
     let similarity = cosine_similarity(&prompt_embedding, &guess_embedding);
-
-    // Convert the similarity to a score between 0 and 100
     let score = (similarity * 50.0 + 50.0).round() as u32;
 
     score.to_string()
